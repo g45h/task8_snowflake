@@ -1,17 +1,37 @@
-import csv
 import os
-
-import numpy as np
-from airflow.hooks.filesystem import FSHook
 import pandas as pd
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+import csv
+from datetime import timedelta, datetime
+from airflow import DAG
+from airflow.hooks.filesystem import FSHook
+from airflow.operators.python import PythonOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.sensors.filesystem import FileSensor
+import snowflake.connector
+from dotenv import load_dotenv
 
 
-def print_hi(name):
-    filepath = '/home/user/PycharmProjects/task8_snowflake/data/763K_plus_IOS_Apps_Info.csv'
-    filepath_parsed = '/home/user/PycharmProjects/task8_snowflake/data/333.csv'
+filename = '763K_plus_IOS_Apps_Info.csv'
+parsed_file = '444.csv'
+hook = FSHook('fs_connection')
+filepath = os.path.join(hook.get_path(), filename)
+filepath_parsed = os.path.join(hook.get_path(), parsed_file)
 
+
+def snowflake_connection():
+    load_dotenv()
+    con = snowflake.connector.connect(
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA")
+    )
+    return con.cursor()
+
+
+def csv_prep():
     df = pd.read_csv(filepath, sep=',', dtype='unicode')
     df = df.drop('_id', axis=1)
     # delete the index column
@@ -55,27 +75,41 @@ def print_hi(name):
     # reusability moment
 
     df.to_csv(filepath_parsed, sep=',', index=False, quoting=csv.QUOTE_ALL)
-
-    df = pd.read_csv(filepath_parsed, sep=',', dtype='unicode', encoding='utf-8')
-    columns = df.columns.tolist()
-    select_query = ""
-    copy_query = ""
-    awoo = 1
-    #  $1 AS IOS_App_Id,
-    for i in columns:
-        copy_query = copy_query + ", " + str(i)
-        select_query = select_query + f'${awoo} AS {i}, '
-        awoo = awoo + 1
-    select_query = select_query[:-2]
-    copy_query = copy_query[2:]
-    staged_to_raw = f"COPY INTO RAW_TABLE ({copy_query}) FROM (SELECT {select_query} FROM @~/staged) " \
-                    f"FILE_FORMAT = (FORMAT_NAME = 'my_csv_format') " \
-                    f"ON_ERROR = 'CONTINUE';"
-    print(staged_to_raw)
+    return True
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+with DAG(
+    'prep',
+    default_args={
+        'depends_on_past': False,
+        'email': ['airflow@example.com'],
+        'email_on_failure': False,
+        'email_on_retry': False,
+        'retries': 1,
+        'retry_delay': timedelta(minutes=1),
+    },
+    description='SnowFlake ETL',
+    schedule_interval=None,
+    start_date=datetime(2021, 1, 1),
+    catchup=False,
+    tags=['ETL']
+) as dag:
+    sensor_task = FileSensor(
+        task_id='fs_connection',
+        fs_conn_id='fs_connection',
+        filepath=filename,
+        poke_interval=10,
+        dag=dag
+    )
+    csv_prep = PythonOperator(
+        task_id='csv_prep',
+        python_callable=csv_prep,
+        provide_context=True,
+        dag=dag
+    )
+    trigger = TriggerDagRunOperator(
+        task_id='test_trigger_dagrun',
+        trigger_dag_id="snowflakeETL",
+        dag=dag
+    )
+    sensor_task >> csv_prep >> trigger

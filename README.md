@@ -12,8 +12,14 @@ docker-compose up -d
 _______________
 create a connection: Airflow -> Admin -> Connections -> New Connection:
 
-Connection Id: file_sensor
+Connection Id: fs_connection
 
 Connection Type: fs
 
 Extra: {"path": "/opt/airflow/data"}
+
+_____________
+snierzynka.sql -> tables & streams & file format creation 
+
+____________
+entrypoint -> prep DAG start 
